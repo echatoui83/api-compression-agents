@@ -1,0 +1,16 @@
+Pillow
+pillow-avif-plugin
+pillow-heif
+opencv-python-headless
+scikit-image
+numpy
+scipy
+python-dotenv
+matplotlib
+tqdm
+groq
+cohere
+mistralai
+pytesseract
+Flask
+gunicorn==21.2.0
