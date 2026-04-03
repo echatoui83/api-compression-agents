@@ -1,5 +1,5 @@
-
 import os
+import sys
 from dotenv import load_dotenv
 import numpy as np
 from PIL import Image
@@ -7,13 +7,31 @@ import cv2
 from scipy.stats import entropy
 from skimage.feature import graycomatrix, graycoprops
 import pytesseract
-
-load_dotenv()
-tesseract_path = os.getenv("TESSERACT_CMD", "C:\\Program Files\\Tesseract-OCR\\tesseract.exe")
-pytesseract.pytesseract.tesseract_cmd = tesseract_path
-
 import json
 from datetime import datetime
+
+# ============================================================
+# CONFIGURATION TESSERACT (Multiplateforme)
+# ============================================================
+load_dotenv()
+tesseract_path = os.getenv("TESSERACT_CMD")
+
+if not tesseract_path:
+    if sys.platform.startswith('win'):
+        # Chemin par défaut Windows
+        tesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    elif sys.platform.startswith('darwin'):
+        # Chemins par défaut macOS (Apple Silicon ou Intel)
+        tesseract_path = "/opt/homebrew/bin/tesseract"
+        if not os.path.exists(tesseract_path):
+            tesseract_path = "/usr/local/bin/tesseract"
+    else:
+        # Chemin par défaut Linux (Ubuntu, Debian, serveurs Cloud)
+        tesseract_path = "/usr/bin/tesseract"
+
+# Applique le chemin uniquement s'il existe (sinon pytesseract cherchera dans le PATH)
+if tesseract_path and os.path.exists(tesseract_path):
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path
 
 
 class AgentAnalyseur:
