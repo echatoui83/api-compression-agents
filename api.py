@@ -5,11 +5,11 @@ import json
 import time
 import glob
 from datetime import datetime
-import os
-# Calcule automatiquement la racine du projet, peu importe l'ordinateur
+
+# ============================================================
+# CONFIGURATION DES CHEMINS DYNAMIQUES
+# ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 from flask import Flask, request, jsonify
@@ -225,9 +225,10 @@ def compresser():
             
         chemin_image   = data.get("chemin_image", "")
         categorie      = data.get("categorie", "photos")
-        dossier_sortie = data.get("dossier_sortie")
-        if not dossier_sortie:
-            dossier_sortie = os.path.join(BASE_DIR, "results", categorie)
+        dossier_sortie = data.get(
+            "dossier_sortie",
+            os.path.join(BASE_DIR, "results", categorie)
+        )
         os.makedirs(dossier_sortie, exist_ok=True)
         if not chemin_image:
             return jsonify({"statut": "erreur", "message": "chemin_image manquant"}), 400
@@ -264,26 +265,22 @@ def evaluer():
 @app.route("/rapport", methods=["POST"])
 def rapport():
     try:
-        data = request.json if request.is_json else request.form.to_dict()
+        data = request.json
 
-        # Fonction bouclier : parse le JSON sans jamais faire planter Flask
-        def safe_loads(val):
-            if isinstance(val, dict):
-                return val
-            if isinstance(val, str):
-                val = val.strip()
-                if not val:
-                    return {}
-                try:
-                    return json.loads(val)
-                except:
-                    return {}
-            return {}
+        # Conversion string → dict si nécessaire
+        rapport_analyse     = data.get("rapport_analyse", {})
+        recommandation      = data.get("recommandation", {})
+        rapport_compression = data.get("rapport_compression", {})
+        rapport_evaluation  = data.get("rapport_evaluation", {})
 
-        rapport_analyse     = safe_loads(data.get("rapport_analyse"))
-        recommandation      = safe_loads(data.get("recommandation"))
-        rapport_compression = safe_loads(data.get("rapport_compression"))
-        rapport_evaluation  = safe_loads(data.get("rapport_evaluation"))
+        if isinstance(rapport_analyse, str):
+            rapport_analyse     = json.loads(rapport_analyse)
+        if isinstance(recommandation, str):
+            recommandation      = json.loads(recommandation)
+        if isinstance(rapport_compression, str):
+            rapport_compression = json.loads(rapport_compression)
+        if isinstance(rapport_evaluation, str):
+            rapport_evaluation  = json.loads(rapport_evaluation)
 
         if not rapport_analyse:
             return jsonify({"statut": "erreur", "message": "rapport_analyse manquant"}), 400
@@ -306,9 +303,10 @@ def pipeline():
         data           = request.json
         chemin_image   = data.get("chemin_image", "")
         categorie      = data.get("categorie", "photos")
-        dossier_sortie = data.get("dossier_sortie")
-        if not dossier_sortie:
-            dossier_sortie = os.path.join(BASE_DIR, "results", categorie)
+        dossier_sortie = data.get(
+            "dossier_sortie",
+            os.path.join(BASE_DIR, "results", categorie)
+        )
         os.makedirs(dossier_sortie, exist_ok=True)
         if not chemin_image:
             return jsonify({"statut": "erreur", "message": "chemin_image manquant"}), 400
@@ -354,6 +352,7 @@ def batch():
             images = []
             for ext in extensions:
                 images += glob.glob(os.path.join(dossier_images, ext))
+                images += glob.glob(os.path.join(dossier_images, ext.upper()))
             print(f"\n📁 {categorie.upper()} : {len(images)} images")
 
             for chemin_image in images:
