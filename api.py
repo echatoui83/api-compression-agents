@@ -5,6 +5,8 @@ import json
 import time
 import glob
 from datetime import datetime
+import base64
+import tempfile
 
 # ============================================================
 # CONFIGURATION DES CHEMINS DYNAMIQUES
@@ -12,7 +14,7 @@ from datetime import datetime
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from agents.agent_analyseur   import AgentAnalyseur
 from agents.agent_classifier  import AgentClassifier
 from agents.agent_compresseur import AgentCompresseur
@@ -27,7 +29,7 @@ agent4 = AgentEvaluateur()
 agent5 = AgentRapporteur()
 
 print("=" * 50)
-print("  API Agents - Compression Intelligente")
+print("  API Agents - Compression Intelligente (Version CLOUD)")
 print("  Agent 1 : AgentAnalyseur     OK")
 print("  Agent 2 : AgentClassifier    OK")
 print("  Agent 3 : AgentCompresseur   OK")
@@ -52,7 +54,6 @@ def appeler_avec_retry(fonction, max_tentatives=3, delai=2, **kwargs):
             time.sleep(delai)
     print(f"    Tous les {max_tentatives} essais ont echoue")
     return None
-
 
 # ============================================================
 # UTILITAIRE : Pipeline avec Backtracking
@@ -148,6 +149,21 @@ def pipeline_avec_backtracking(chemin_image, categorie, dossier_sortie,
     }
     return rapport_final
 
+# ============================================================
+# FONCTION CLOUD : DECODAGE BASE64
+# ============================================================
+def decoder_image_base64(data_json):
+    if "image_base64" in data_json:
+        img_data = base64.b64decode(data_json["image_base64"])
+        nom_f = data_json.get("nom_fichier", "temp_cloud.jpg")
+        
+        # On utilise le dossier temporaire sécurisé du serveur Render
+        chemin_serveur = os.path.join(tempfile.gettempdir(), nom_f)
+        with open(chemin_serveur, "wb") as f:
+            f.write(img_data)
+        return chemin_serveur
+    return data_json.get("chemin_image", "")
+
 
 # ============================================================
 # ROUTES
@@ -157,7 +173,7 @@ def pipeline_avec_backtracking(chemin_image, categorie, dossier_sortie,
 def health():
     return jsonify({
         "statut" : "ok",
-        "message": "API Agents operationnelle",
+        "message": "API Agents operationnelle (Cloud Mode)",
         "routes" : [
             "GET  /health",
             "POST /analyser",
@@ -166,25 +182,27 @@ def health():
             "POST /evaluer",
             "POST /rapport",
             "POST /pipeline",
-            "POST /batch"
+            "POST /batch",
+            "GET  /download"
         ]
     }), 200
-
 
 @app.route("/analyser", methods=["POST"])
 def analyser():
     try:
-        data         = request.json
-        chemin_image = data.get("chemin_image", "")
-        if not chemin_image:
-            return jsonify({"statut": "erreur", "message": "chemin_image manquant"}), 400
-        if not os.path.exists(chemin_image):
-            return jsonify({"statut": "erreur", "message": f"Image non trouvee"}), 404
+        data = request.json
+        # Décodage Base64 via notre nouvelle fonction Cloud
+        chemin_image = decoder_image_base64(data)
+        
+        if not chemin_image or not os.path.exists(chemin_image):
+            return jsonify({"statut": "erreur", "message": "Image non trouvee sur le serveur"}), 404
+            
         rapport = agent1.analyser(chemin_image)
+        # On s'assure que le chemin sur le serveur est bien transmis aux agents suivants dans n8n
+        rapport["chemin_image"] = chemin_image
         return jsonify(rapport), 200
     except Exception as e:
         return jsonify({"statut": "erreur", "message": str(e)}), 500
-
 
 @app.route("/classifier", methods=["POST"])
 def classifier():
@@ -208,13 +226,11 @@ def classifier():
     except Exception as e:
         return jsonify({"statut": "erreur", "message": str(e)}), 500
 
-
 @app.route("/compresser", methods=["POST"])
 def compresser():
     try:
         data = request.json if request.is_json else request.form.to_dict()
         
-        # Support pour variables directes ou imbriquées (typique dans n8n)
         if "recommandation" in data and isinstance(data["recommandation"], dict):
             rec = data["recommandation"]
             format_recommande = rec.get("format_recommande", data.get("format_recommande", "JPEG"))
@@ -225,13 +241,17 @@ def compresser():
             
         chemin_image   = data.get("chemin_image", "")
         categorie      = data.get("categorie", "photos")
+        
+        # Sur le cloud, on écrit directement dans le dossier temporaire pour ne pas saturer le disque
         dossier_sortie = data.get(
             "dossier_sortie",
-            os.path.join(BASE_DIR, "results", categorie)
+            os.path.join(tempfile.gettempdir(), "results", categorie)
         )
         os.makedirs(dossier_sortie, exist_ok=True)
+        
         if not chemin_image:
             return jsonify({"statut": "erreur", "message": "chemin_image manquant"}), 400
+            
         rapport = agent3.compresser(
             chemin_image   = chemin_image,
             recommandation = {"format_recommande": format_recommande,
@@ -241,7 +261,6 @@ def compresser():
         return jsonify(rapport), 200
     except Exception as e:
         return jsonify({"statut": "erreur", "message": str(e)}), 500
-
 
 @app.route("/evaluer", methods=["POST"])
 def evaluer():
@@ -261,13 +280,11 @@ def evaluer():
     except Exception as e:
         return jsonify({"statut": "erreur", "message": str(e)}), 500
 
-
 @app.route("/rapport", methods=["POST"])
 def rapport():
     try:
         data = request.json
 
-        # Conversion string → dict si nécessaire
         rapport_analyse     = data.get("rapport_analyse", {})
         recommandation      = data.get("recommandation", {})
         rapport_compression = data.get("rapport_compression", {})
@@ -296,18 +313,18 @@ def rapport():
     except Exception as e:
         return jsonify({"statut": "erreur", "message": str(e)}), 500
 
-
 @app.route("/pipeline", methods=["POST"])
 def pipeline():
     try:
         data           = request.json
-        chemin_image   = data.get("chemin_image", "")
+        chemin_image   = decoder_image_base64(data)
         categorie      = data.get("categorie", "photos")
         dossier_sortie = data.get(
             "dossier_sortie",
-            os.path.join(BASE_DIR, "results", categorie)
+            os.path.join(tempfile.gettempdir(), "results", categorie)
         )
         os.makedirs(dossier_sortie, exist_ok=True)
+        
         if not chemin_image:
             return jsonify({"statut": "erreur", "message": "chemin_image manquant"}), 400
         if not os.path.exists(chemin_image):
@@ -321,7 +338,6 @@ def pipeline():
         return jsonify(resultat), 200
     except Exception as e:
         return jsonify({"statut": "erreur", "message": str(e)}), 500
-
 
 @app.route("/batch", methods=["POST"])
 def batch():
@@ -353,12 +369,10 @@ def batch():
             for ext in extensions:
                 images += glob.glob(os.path.join(dossier_images, ext))
                 images += glob.glob(os.path.join(dossier_images, ext.upper()))
-            print(f"\n📁 {categorie.upper()} : {len(images)} images")
 
             for chemin_image in images:
                 nom = os.path.basename(chemin_image)
                 resume["total"] += 1
-                print(f"\n  {nom}")
                 try:
                     resultat = pipeline_avec_backtracking(
                         chemin_image   = chemin_image,
@@ -381,8 +395,6 @@ def batch():
                         "nb_backtrack": bt.get("nb_backtracking", 0),
                         "statut"      : "succes"
                     })
-                    print(f"  OK — SSIM={bt.get('ssim_final')} "
-                          f"backtracking={bt.get('nb_backtracking', 0)}")
                 except Exception as e:
                     resume["erreurs"] += 1
                     resume["resultats"].append({
@@ -390,20 +402,31 @@ def batch():
                         "categorie": categorie,
                         "statut"   : f"erreur: {str(e)[:50]}"
                     })
-                    print(f"  Erreur : {str(e)[:80]}")
 
         chemin_resume = os.path.join(base_results, "resume_batch.json")
         with open(chemin_resume, "w", encoding="utf-8") as f:
             json.dump(resume, f, indent=4, ensure_ascii=False)
 
-        print(f"\nBATCH TERMINE : {resume['succes']}/{resume['total']} succes")
         return jsonify(resume), 200
 
     except Exception as e:
         return jsonify({"statut": "erreur", "message": str(e)}), 500
 
+# ============================================================
+# ROUTE DE TELECHARGEMENT (Pour Streamlit Cloud)
+# ============================================================
+@app.route("/download", methods=["GET"])
+def download():
+    """Route pour servir les images compressées depuis le stockage éphémère de Render"""
+    chemin = request.args.get("chemin")
+    if not chemin or not os.path.exists(chemin):
+        return jsonify({"erreur": "Fichier introuvable"}), 404
+    try:
+        return send_file(chemin, as_attachment=True)
+    except Exception as e:
+        return jsonify({"erreur": str(e)}), 500
 
 # ============================================================
 if __name__ == "__main__":
-    print("\n Demarrage API sur http://localhost:5000")
+    print("\n Demarrage API Cloud sur port 5000")
     app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
